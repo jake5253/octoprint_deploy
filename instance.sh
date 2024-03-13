@@ -278,8 +278,12 @@ detect_printer() {
     while [[ -z "$UDEV" ]] && [[ $counter -lt 60 ]]; do
         TEMPUSB=$(dmesg | sed -n -e 's/^.*\(cdc_acm\|ftdi_sio\|ch341\|cp210x\|ch34x\) \([0-9].*[0-9]\): \(tty.*\|FTD.*\|ch341-uart.*\|cp210x\|ch34x\).*/\2/p')
         UDEV=$(dmesg | sed -n -e 's/^.*SerialNumber: //p')
+        if [ -z "$UDEV" ] && [ -n "$TEMPUSB" ]; then
+            VENDOR_ID=$(dmesg | awk -F'idVendor=' '{if($2 != ""){split($2,a,","); print a[1]}}')
+            PRODUCT_ID=$(dmesg | awk -F'idProduct=' '{if($2 != ""){split($2,a,","); print a[1]}}')
+        fi
         counter=$(( $counter + 1 ))
-        if [[ -n "$TEMPUSB" ]] && [[ -z "$UDEV" ]]; then
+        if { [[ -n "$VENDOR_ID" ]] && [[ -n "$PRODUCT_ID" ]]; } || { [[ -n "$TEMPUSB" ]] && [[ -z "$UDEV" ]]; }; then
             break
         fi
         sleep 1
@@ -290,26 +294,41 @@ detect_printer() {
 printer_udev() {
     write=$1
     if [ "$write" == true ]; then
-        #Printer udev identifier technique - either Serial number or USB port
+        #Vendor/Product ID
+        if [[ -n "$VENDOR_ID" ]] && [[ -n "$PRODUCT_ID" ]]; then
+            echo SUBSYSTEM==\"tty\", ATTRS{idVendor}==\"$VENDOR_ID\", ATTRS{idProduct}==\"$PRODUCT_ID\", SYMLINK+=\"octo_$INSTANCE\" >> /etc/udev/rules.d/99-octoprint.rules
+            break
         #Serial Number
-        if [ -n "$UDEV" ]; then
+        elif [ -n "$UDEV" ]; then
             echo SUBSYSTEM==\"tty\", ATTRS{serial}==\"$UDEV\", SYMLINK+=\"octo_$INSTANCE\" >> /etc/udev/rules.d/99-octoprint.rules
-        fi
-        
+            break
         #USB port
-        if [ -n "$USB" ]; then
+        elif [ -n "$USB" ]; then
             echo KERNELS==\"$USB\",SUBSYSTEM==\"tty\",SYMLINK+=\"octo_$INSTANCE\" >> /etc/udev/rules.d/99-octoprint.rules
+            break
         fi
     else
         #No serial number
         if [ -z "$UDEV" ] && [ -n "$TEMPUSB" ]; then
-            echo "Printer Serial Number not detected."
-            echo "The physical USB port will be used."
-            echo "USB hubs and printers detected this way must stay plugged into the same USB positions on your machine."
-            echo
-            USB=$TEMPUSB
-            echo "Your printer will be setup at the following usb address: ${cyan}$USB${white}"
-            echo
+            if [[ -n "$VENDOR_ID" ]] && [[ -n "$PRODUCT_ID" ]]; then
+                echo "Printer Serial Number not detected."
+                echo "The printer will be identified by Vendor and Product ID"
+                echo "If you use more than one of the same brand of printer you may experience detection problems"
+                echo "when using a multi-instance setup and will need to change the udev rules"
+                echo
+                echo "Your printer will be identified as:"
+                echo -e "\t${green}Vendor: ${cyan}$VENDOR_ID"
+                echo -e "\t${green}Product: ${cyan}$PRODUCT_ID${white}"
+                echo
+            else
+                echo "Printer Serial Number not detected."
+                echo "The physical USB port will be used."
+                echo "USB hubs and printers detected this way must stay plugged into the same USB positions on your machine."
+                echo
+                USB=$TEMPUSB
+                echo "Your printer will be setup at the following usb address: ${cyan}$USB${white}"
+                echo
+            fi
         else
             echo -e "Serial number detected as: ${cyan}$UDEV${white}"
             check_sn "$UDEV"
